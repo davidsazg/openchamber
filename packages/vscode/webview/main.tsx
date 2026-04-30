@@ -20,6 +20,7 @@ declare global {
     __VSCODE_CONFIG__?: {
       apiUrl?: string;
       workspaceFolder: string;
+      workspaceFolders?: string[];
       theme: string;
       connectionStatus: string;
       cliAvailable?: boolean;
@@ -1197,9 +1198,12 @@ onCommand('createSessionWithPrompt', (payload) => {
 });
 
 // Listen for newSession command from extension title bar button
-onCommand('newSession', () => {
+onCommand('newSession', (payload) => {
+  const directoryOverride = (payload as { directoryOverride?: string } | undefined)?.directoryOverride;
   import('@/sync/session-ui-store').then(({ useSessionUIStore }) => {
-    useSessionUIStore.getState().openNewSessionDraft();
+    useSessionUIStore.getState().openNewSessionDraft(
+      directoryOverride !== undefined ? { directoryOverride } : undefined
+    );
   });
   
   // Also dispatch event to navigate to chat view in VSCodeLayout

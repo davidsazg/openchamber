@@ -1247,6 +1247,7 @@ function handleEvent(
 export function SyncProvider(props: {
   sdk: OpencodeClient
   directory: string
+  additionalDirectories?: string[]
   children: React.ReactNode
 }) {
   const messageStreamTransport = useConfigStore((state) => state.settingsMessageStreamTransport)
@@ -1373,6 +1374,21 @@ export function SyncProvider(props: {
         bootingRoot = false
       })
   }, [props.sdk])
+
+  // Pre-bootstrap any additional directories provided at mount time (e.g. all VS Code
+  // workspace folders). Each call to ensureChild creates the child store and triggers
+  // its onBootstrap handler so sessions are loaded without waiting for the user to
+  // navigate to that directory.
+  useEffect(() => {
+    const dirs = props.additionalDirectories
+    if (!dirs || dirs.length === 0) return
+    for (const dir of dirs) {
+      if (dir && dir !== props.directory) {
+        childStores.ensureChild(dir)
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [childStores, props.additionalDirectories])
 
   // Event pipeline — created once per mount. No class, no start/stop.
   // Abort controller owned by the pipeline closure. Cleanup aborts + flushes.

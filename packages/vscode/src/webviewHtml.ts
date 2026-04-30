@@ -8,6 +8,7 @@ export interface WebviewHtmlOptions {
   webview: vscode.Webview;
   extensionUri: vscode.Uri;
   workspaceFolder: string;
+  workspaceFolders?: string[];
   initialStatus: ConnectionStatus;
   cliAvailable: boolean;
   panelType?: PanelType;
@@ -44,6 +45,7 @@ export function getWebviewHtml(options: WebviewHtmlOptions): string {
     webview,
     extensionUri,
     workspaceFolder,
+    workspaceFolders,
     initialStatus,
     cliAvailable,
     panelType = 'chat',
@@ -163,6 +165,7 @@ export function getWebviewHtml(options: WebviewHtmlOptions): string {
 
     window.__VSCODE_CONFIG__ = {
       workspaceFolder: "${workspaceFolder.replace(/\\/g, '\\\\')}",
+      workspaceFolders: ${JSON.stringify(workspaceFolders ?? [workspaceFolder])},
       theme: "${themeKind}",
       connectionStatus: "${initialStatus}",
       cliAvailable: ${cliAvailable},

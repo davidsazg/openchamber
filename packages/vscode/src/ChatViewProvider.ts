@@ -181,14 +181,35 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  public createNewSession() {
+  public async createNewSession() {
+    const folders = vscode.workspace.workspaceFolders;
+
+    let directoryOverride: string | undefined;
+
+    if (folders && folders.length > 1) {
+      const items = folders.map((f) => ({
+        label: f.name,
+        description: normalizeWindowsDriveLetter(f.uri.fsPath),
+      }));
+
+      const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: 'Select workspace folder for the new session',
+        matchOnDescription: true,
+      });
+
+      if (!picked) {
+        return; // user cancelled — do nothing
+      }
+
+      directoryOverride = picked.description;
+    }
     if (this._view) {
-      // Reveal the webview panel
       this._view.show(true);
       
       this._view.webview.postMessage({
         type: 'command',
-        command: 'newSession'
+        command: 'newSession',
+        ...(directoryOverride !== undefined ? { payload: { directoryOverride } } : {}),
       });
     }
   }
@@ -396,6 +417,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const workspaceFolder = normalizeWindowsDriveLetter(
       vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''
     );
+    const workspaceFolders = (vscode.workspace.workspaceFolders ?? [])
+      .map((f) => normalizeWindowsDriveLetter(f.uri.fsPath))
+      .filter((f) => f.length > 0);
     // Use cached values which are updated by onStatusChange callback
     const initialStatus = this._cachedStatus;
     const cliAvailable = this._openCodeManager?.isCliAvailable() ?? false;
@@ -404,6 +428,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       webview,
       extensionUri: this._extensionUri,
       workspaceFolder,
+      workspaceFolders: workspaceFolders.length > 0 ? workspaceFolders : undefined,
       initialStatus,
       cliAvailable,
       devServerUrl: this._webviewDevServerUrl,

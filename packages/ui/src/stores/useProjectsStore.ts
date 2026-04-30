@@ -297,30 +297,42 @@ const getVSCodeWorkspaceProject = (): { projects: ProjectEntry[]; activeProjectI
     return null;
   }
 
-  const workspaceFolder = (window as unknown as { __VSCODE_CONFIG__?: { workspaceFolder?: unknown } }).__VSCODE_CONFIG__?.workspaceFolder;
-  if (typeof workspaceFolder !== 'string' || workspaceFolder.trim().length === 0) {
-    return null;
+  const vscodeConfig = (window as unknown as { __VSCODE_CONFIG__?: { workspaceFolder?: unknown; workspaceFolders?: unknown } }).__VSCODE_CONFIG__;
+
+  // Prefer the full array of workspace folders when available (multi-root workspaces).
+  // Fall back to the single workspaceFolder for backward compatibility.
+  const rawFolders: unknown[] = Array.isArray(vscodeConfig?.workspaceFolders)
+    ? (vscodeConfig.workspaceFolders as unknown[])
+    : typeof vscodeConfig?.workspaceFolder === 'string' && vscodeConfig.workspaceFolder.trim().length > 0
+      ? [vscodeConfig.workspaceFolder]
+      : [];
+
+  const entries: ProjectEntry[] = [];
+  const now = Date.now();
+
+  for (const raw of rawFolders) {
+    if (typeof raw !== 'string' || raw.trim().length === 0) continue;
+    const normalizedPath = normalizeProjectPath(raw);
+    if (!normalizedPath) continue;
+    const id = createProjectIdFromPath(normalizedPath);
+    entries.push({
+      id,
+      path: normalizedPath,
+      label: deriveProjectLabel(normalizedPath),
+      addedAt: now,
+      lastOpenedAt: now,
+    });
   }
 
-  const normalizedPath = normalizeProjectPath(workspaceFolder);
-  if (!normalizedPath) {
+  if (entries.length === 0) {
     return null;
   }
-
-  const id = createProjectIdFromPath(normalizedPath);
-  const entry: ProjectEntry = {
-    id,
-    path: normalizedPath,
-    label: deriveProjectLabel(normalizedPath),
-    addedAt: Date.now(),
-    lastOpenedAt: Date.now(),
-  };
 
   if (streamDebugEnabled()) {
-    console.log('[OpenChamber][VSCode][projects] Using workspace fallback project', entry);
+    console.log('[OpenChamber][VSCode][projects] Using workspace project entries', entries);
   }
 
-  return { projects: [entry], activeProjectId: id };
+  return { projects: entries, activeProjectId: entries[0].id };
 };
 
 // VS Code runtime should behave as a single-project environment scoped to the workspace folder.

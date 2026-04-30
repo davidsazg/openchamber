@@ -224,6 +224,14 @@ function App({ apis }: AppProps) {
   const [manualInitRetrying, setManualInitRetrying] = React.useState(false);
   const wideChatLayoutEnabled = useUIStore((state) => state.wideChatLayoutEnabled);
   const isDesktopRuntime = React.useMemo(() => isDesktopShell(), []);
+  // All VS Code workspace folders — used to pre-bootstrap sessions for every folder,
+  // not just the primary one. Empty array in non-VS Code runtimes.
+  const vsCodeAdditionalDirectories = React.useMemo<string[]>(() => {
+    if (typeof window === 'undefined') return [];
+    const folders = (window as unknown as { __VSCODE_CONFIG__?: { workspaceFolders?: unknown } }).__VSCODE_CONFIG__?.workspaceFolders;
+    if (!Array.isArray(folders)) return [];
+    return folders.filter((f): f is string => typeof f === 'string' && f.trim().length > 0);
+  }, []);
   const setPlanModeEnabled = useFeatureFlagsStore((state) => state.setPlanModeEnabled);
   const [bootInjectionStatus, setBootInjectionStatus] = React.useState<BootInjectionStatus>(() => {
     return getBootInjectionStatus();
@@ -872,7 +880,7 @@ function App({ apis }: AppProps) {
     if (panelType === 'agentManager') {
     return (
       <ErrorBoundary>
-        <SyncProvider sdk={opencodeClient.getSdkClient()} directory={currentDirectory || ''}>
+        <SyncProvider sdk={opencodeClient.getSdkClient()} directory={currentDirectory || ''} additionalDirectories={vsCodeAdditionalDirectories} >
           <RuntimeAPIProvider apis={apis}>
             <TooltipProvider delayDuration={700} skipDelayDuration={150}>
               <div className="h-full text-foreground bg-background">
@@ -889,7 +897,7 @@ function App({ apis }: AppProps) {
 
     return (
       <ErrorBoundary>
-        <SyncProvider sdk={opencodeClient.getSdkClient()} directory={currentDirectory || ''}>
+        <SyncProvider sdk={opencodeClient.getSdkClient()} directory={currentDirectory || ''} additionalDirectories={vsCodeAdditionalDirectories} >
           <RuntimeAPIProvider apis={apis}>
             <FireworksProvider>
               <TooltipProvider delayDuration={700} skipDelayDuration={150}>
