@@ -407,7 +407,9 @@ export const ActiveEditorFileSuggestion = memo(() => {
       : `${selection.startLine}-${selection.endLine}`
   }
   const selectionLabel = selection ? `${fileName}:${selectionRange}` : ''
-  const isSelectionAttached = !!selectionLabel && attachedFiles.some((f) => f.source === 'vscode' && f.vscodeSource === 'selection' && f.filename === selectionLabel)
+  const isSelectionAttached = !!selectionLabel && attachedFiles.some(
+    (f) => f.source === 'vscode' && f.vscodeSource === 'selection' && f.filename === selectionLabel && f.vscodePath === filePath
+  )
 
   // Nothing to show — file is already attached and there's no (or already-attached) selection
   if (isFileAttached && (!selection || isSelectionAttached)) return null;
