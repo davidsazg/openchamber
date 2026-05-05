@@ -29,7 +29,7 @@ import { useUserMessageHistory } from '@/sync/sync-context';
 import { useInlineCommentDraftStore, type InlineCommentDraft } from '@/stores/useInlineCommentDraftStore';
 import { appendInlineComments } from '@/lib/messages/inlineComments';
 import { renderMagicPrompt } from '@/lib/magicPrompts';
-import { AttachedFilesList } from './FileAttachment';
+import { AttachedFilesList, AttachedVSCodeFileChips, ActiveEditorFileSuggestion } from './FileAttachment';
 import { QueuedMessageChips } from './QueuedMessageChips';
 import { FileMentionAutocomplete, type FileMentionHandle } from './FileMentionAutocomplete';
 import { CommandAutocomplete, type CommandAutocompleteHandle, type CommandInfo } from './CommandAutocomplete';
@@ -72,6 +72,8 @@ import { buildSessionTargetOptions } from '@/sync/session-worktree-contract';
 import { usePermissionStore } from '@/stores/permissionStore';
 import { extractGitChangedFiles } from './changedFiles';
 import { useI18n } from '@/lib/i18n';
+import { fetchResponseStyleInstruction } from '@/lib/responseStyle';
+import { getSyncMessages } from '@/sync/sync-refs';
 
 const MAX_VISIBLE_TEXTAREA_LINES = 8;
 const EMPTY_QUEUE: QueuedMessage[] = [];
@@ -85,6 +87,10 @@ const VS_CODE_DROP_DATA_TYPES = [
     'text/uri-list',
     'text/plain',
 ];
+
+const hasUserMessages = (sessionId: string, directory?: string) => {
+    return getSyncMessages(sessionId, directory).some((message) => message.role === 'user');
+};
 
 const FILE_URI_PREFIX = 'file://';
 
@@ -431,7 +437,7 @@ const PermissionAutoAcceptButton = React.memo(function PermissionAutoAcceptButto
     }
 
     return (
-        <Tooltip delayDuration={600}>
+        <Tooltip>
             <TooltipTrigger asChild>
                 {button}
             </TooltipTrigger>
@@ -454,7 +460,7 @@ const FocusModeButton = React.memo(function FocusModeButton(props: FocusModeButt
     const { t } = useI18n();
 
     return (
-        <Tooltip delayDuration={600}>
+        <Tooltip>
             <TooltipTrigger asChild>
                 <button
                     type="button"
@@ -1245,6 +1251,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
 
     const canAbort = sessionPhase !== 'idle';
 
+    const getCurrentInputSnapshot = React.useCallback(() => {
+        const currentMessage = textareaRef.current?.value ?? message;
+        return {
+            message: currentMessage,
+            hasContent: currentMessage.trim().length > 0 || sendableAttachedFiles.length > 0 || hasDrafts,
+        };
+    }, [hasDrafts, message, sendableAttachedFiles.length]);
+
     // Keep a ref to handleSubmit so callbacks don't depend on it.
     type SubmitOptions = {
         queuedOnly?: boolean;
@@ -1253,11 +1267,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
 
     // Add message to queue instead of sending
     const handleQueueMessage = React.useCallback(() => {
-        if (!hasContent || !currentSessionId) return;
+        const inputSnapshot = getCurrentInputSnapshot();
+        if (!inputSnapshot.hasContent || !currentSessionId) return;
 
         const drafts = consumeDrafts(currentSessionId);
 
-        let messageToQueue = message.replace(/^\n+|\n+$/g, '');
+        let messageToQueue = inputSnapshot.message.replace(/^\n+|\n+$/g, '');
         if (drafts.length > 0) {
             messageToQueue = appendInlineComments(messageToQueue, drafts);
         }
@@ -1286,7 +1301,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         if (!isMobile) {
             textareaRef.current?.focus();
         }
-    }, [hasContent, currentSessionId, message, sendableAttachedFiles, sanitizeAttachmentsForSend, addToQueue, clearAttachedFiles, isMobile, consumeDrafts, currentProviderId, currentModelId, currentAgentName, currentVariant]);
+    }, [getCurrentInputSnapshot, currentSessionId, sendableAttachedFiles, sanitizeAttachmentsForSend, addToQueue, clearAttachedFiles, isMobile, consumeDrafts, currentProviderId, currentModelId, currentAgentName, currentVariant]);
 
     const handleQueuedMessageEdit = React.useCallback((content: string) => {
         setMessage(content);
@@ -1313,10 +1328,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
 
     const handleSubmit = async (options?: SubmitOptions) => {
         const queuedOnly = options?.queuedOnly ?? false;
+        const inputSnapshot = getCurrentInputSnapshot();
 
         if (queuedOnly) {
             if (!hasQueuedMessages || !currentSessionId) return;
-        } else if (!canSend || (!currentSessionId && !newSessionDraftOpen)) {
+        } else if ((!inputSnapshot.hasContent && !hasQueuedMessages) || (!currentSessionId && !newSessionDraftOpen)) {
             return;
         }
 
@@ -1363,8 +1379,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
         }
 
         // Add current input (skip for queued-only auto-send)
-        if (!queuedOnly && hasContent) {
-            const messageToSend = message.replace(/^\n+|\n+$/g, '');
+        if (!queuedOnly && inputSnapshot.hasContent) {
+            const messageToSend = inputSnapshot.message.replace(/^\n+|\n+$/g, '');
             const { sanitizedText, mention } = parseAgentMentions(messageToSend, agents);
             const { sanitizedText: messageText, attachments: mentionAttachments } = extractInlineFileMentions(sanitizedText);
             const attachmentsToSend = sanitizeAttachmentsForSend(sendableAttachedFiles);
@@ -1547,6 +1563,20 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
             }
         }
 
+        const currentSessionDirectory = currentSessionId
+            ? useSessionUIStore.getState().getDirectoryForSession(currentSessionId) || currentDirectory
+            : currentDirectory;
+        const shouldAddResponseStyle = newSessionDraftOpen || (currentSessionId ? !hasUserMessages(currentSessionId, currentSessionDirectory) : false);
+        if (shouldAddResponseStyle) {
+            const responseStyleInstruction = await fetchResponseStyleInstruction().catch(() => null);
+            if (responseStyleInstruction) {
+                additionalParts.push({
+                    text: responseStyleInstruction,
+                    synthetic: true,
+                });
+            }
+        }
+
         // Collect all attachments for error recovery
         const allAttachments = [
             ...primaryAttachments,
@@ -1635,13 +1665,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
 
     // Primary action for send button - respects queue mode setting
     const handlePrimaryAction = React.useCallback(() => {
-        const canQueue = inputMode === 'normal' && hasContent && currentSessionId && sessionPhase !== 'idle';
+        const inputSnapshot = getCurrentInputSnapshot();
+        const canQueue = inputMode === 'normal' && inputSnapshot.hasContent && currentSessionId && sessionPhase !== 'idle';
         if (queueModeEnabled && canQueue) {
             handleQueueMessage();
         } else {
             void handleSubmitRef.current();
         }
-    }, [inputMode, hasContent, currentSessionId, sessionPhase, queueModeEnabled, handleQueueMessage]);
+    }, [inputMode, getCurrentInputSnapshot, currentSessionId, sessionPhase, queueModeEnabled, handleQueueMessage]);
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         // Early return during IME composition to prevent interference with autocomplete.
@@ -3646,95 +3677,101 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                                 : undefined}
                         />
                     )}
-                    <div className={cn("relative overflow-hidden", isDesktopExpanded && 'flex flex-1 min-h-0 flex-col')}>
-                        {highlightedComposerContent && (
-                            <div
-                                aria-hidden
+                    <div className={cn("overflow-hidden", isDesktopExpanded && 'flex flex-1 min-h-0 flex-col')}>
+                        <div className="flex items-center gap-1 px-3 pt-1 flex-wrap relative z-10">
+                            <AttachedVSCodeFileChips />
+                            <ActiveEditorFileSuggestion />
+                        </div>
+                        <div className={cn("relative overflow-hidden", isDesktopExpanded && 'flex flex-1 min-h-0 flex-col')}>
+                            {highlightedComposerContent && (
+                                <div
+                                    aria-hidden
+                                    className={cn(
+                                        'pointer-events-none absolute inset-0 z-0 whitespace-pre-wrap break-words px-3 rounded-b-none',
+                                        isDesktopExpanded
+                                            ? 'h-full min-h-0 py-4'
+                                            : isMobile
+                                                ? 'py-2.5'
+                                                : 'pt-4 pb-2',
+                                        inputMode === 'shell' ? 'font-mono' : 'typography-markdown md:typography-ui-label',
+                                    )}
+                                    ref={composerHighlightRef}
+                                >
+                                    {highlightedComposerContent.map((part, index) => (
+                                        <span
+                                            key={`${index}-${part.text.length}`}
+                                            className={
+                                                part.mentionKind === 'file'
+                                                    ? 'text-[var(--status-info)]'
+                                                    : part.mentionKind === 'agent'
+                                                        ? 'text-[var(--status-success)]'
+                                                        : 'text-foreground'
+                                            }
+                                        >
+                                            {part.text}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+                            <Textarea
+                                simple
+                                ref={textareaRef}
+                                data-chat-input="true"
+                                value={message}
+                                onChange={handleTextChange}
+                                onBeforeInput={handleBeforeInput}
+                                onKeyDown={handleKeyDown}
+                                onPaste={handlePaste}
+                                onDragEnter={handleDragEnter}
+                                onDragOver={handleDragOver}
+                                onDropCapture={handleDropCapture}
+                                onDrop={handleDrop}
+                                onDragEnd={handleDragEnd}
+                                onKeyUp={updateAutocompleteOverlayPosition}
+                                onClick={updateAutocompleteOverlayPosition}
+                                onScroll={(event) => {
+                                    updateAutocompleteOverlayPosition();
+                                    const scrollTop = event.currentTarget.scrollTop;
+                                    if (composerHighlightRef.current) {
+                                        composerHighlightRef.current.style.transform = `translateY(-${scrollTop}px)`;
+                                    }
+                                }}
+                                onSelect={(e) => {
+                                    const ta = e.currentTarget;
+                                    cursorPosRef.current = ta.selectionStart ?? 0;
+                                    updateAutocompleteOverlayPosition();
+                                }}
+                                placeholder={currentSessionId || newSessionDraftOpen
+                                    ? inputMode === 'shell'
+                                        ? t('chat.chatInput.placeholder.shell')
+                                        : t('chat.chatInput.placeholder.chat')
+                                    : t('chat.chatInput.placeholder.selectSession')}
+                                disabled={!currentSessionId && !newSessionDraftOpen}
+                                autoCorrect={isMobile ? "on" : "off"}
+                                autoCapitalize={isMobile ? "sentences" : "off"}
+                                spellCheck={isMobile || inputSpellcheckEnabled}
+                                fillContainer={isDesktopExpanded}
+                                outerClassName={cn('ring-0 bg-transparent shadow-none hover:bg-transparent focus-within:ring-0', isDesktopExpanded && 'flex-1 min-h-0')}
                                 className={cn(
-                                    'pointer-events-none absolute inset-0 z-0 whitespace-pre-wrap break-words px-3 rounded-b-none',
+                                    'min-h-[52px] resize-none border-0 px-3 rounded-b-none appearance-none hover:border-transparent bg-transparent relative z-10',
                                     isDesktopExpanded
                                         ? 'h-full min-h-0 py-4'
                                         : isMobile
                                             ? 'py-2.5'
                                             : 'pt-4 pb-2',
-                                    inputMode === 'shell' ? 'font-mono' : 'typography-markdown md:typography-ui-label',
+                                    inputMode === 'shell' && 'font-mono',
+                                    highlightedComposerContent && 'text-transparent caret-[var(--surface-foreground)]',
                                 )}
-                                ref={composerHighlightRef}
-                            >
-                                {highlightedComposerContent.map((part, index) => (
-                                    <span
-                                        key={`${index}-${part.text.length}`}
-                                        className={
-                                            part.mentionKind === 'file'
-                                                ? 'text-[var(--status-info)]'
-                                                : part.mentionKind === 'agent'
-                                                    ? 'text-[var(--status-success)]'
-                                                    : 'text-foreground'
-                                        }
-                                    >
-                                        {part.text}
-                                    </span>
-                                ))}
-                            </div>
-                        )}
-                        <Textarea
-                            simple
-                            ref={textareaRef}
-                            data-chat-input="true"
-                            value={message}
-                            onChange={handleTextChange}
-                            onBeforeInput={handleBeforeInput}
-                            onKeyDown={handleKeyDown}
-                            onPaste={handlePaste}
-                            onDragEnter={handleDragEnter}
-                            onDragOver={handleDragOver}
-                            onDropCapture={handleDropCapture}
-                            onDrop={handleDrop}
-                            onDragEnd={handleDragEnd}
-                            onKeyUp={updateAutocompleteOverlayPosition}
-                            onClick={updateAutocompleteOverlayPosition}
-                            onScroll={(event) => {
-                                updateAutocompleteOverlayPosition();
-                                const scrollTop = event.currentTarget.scrollTop;
-                                if (composerHighlightRef.current) {
-                                    composerHighlightRef.current.style.transform = `translateY(-${scrollTop}px)`;
-                                }
-                            }}
-                            onSelect={(e) => {
-                                const ta = e.currentTarget;
-                                cursorPosRef.current = ta.selectionStart ?? 0;
-                                updateAutocompleteOverlayPosition();
-                            }}
-                            placeholder={currentSessionId || newSessionDraftOpen
-                                ? inputMode === 'shell'
-                                    ? t('chat.chatInput.placeholder.shell')
-                                    : t('chat.chatInput.placeholder.chat')
-                                : t('chat.chatInput.placeholder.selectSession')}
-                            disabled={!currentSessionId && !newSessionDraftOpen}
-                            autoCorrect={isMobile ? "on" : "off"}
-                            autoCapitalize={isMobile ? "sentences" : "off"}
-                            spellCheck={isMobile || inputSpellcheckEnabled}
-                            fillContainer={isDesktopExpanded}
-                            outerClassName={cn('ring-0 bg-transparent shadow-none hover:bg-transparent focus-within:ring-0', isDesktopExpanded && 'flex-1 min-h-0')}
-                            className={cn(
-                                'min-h-[52px] resize-none border-0 px-3 rounded-b-none appearance-none hover:border-transparent bg-transparent relative z-10',
-                                isDesktopExpanded
-                                    ? 'h-full min-h-0 py-4'
-                                    : isMobile
-                                        ? 'py-2.5'
-                                        : 'pt-4 pb-2',
-                                inputMode === 'shell' && 'font-mono',
-                                highlightedComposerContent && 'text-transparent caret-[var(--surface-foreground)]',
-                            )}
-                            style={{
-                                flex: isDesktopExpanded ? '1 1 auto' : 'none',
-                                height: !isDesktopExpanded && textareaSize ? `${textareaSize.height}px` : undefined,
-                                maxHeight: !isDesktopExpanded && textareaSize ? `${textareaSize.maxHeight}px` : undefined,
-                                borderTopLeftRadius: chatInputRadius,
-                                borderTopRightRadius: chatInputRadius,
-                            }}
-                            rows={1}
-                        />
+                                style={{
+                                    flex: isDesktopExpanded ? '1 1 auto' : 'none',
+                                    height: !isDesktopExpanded && textareaSize ? `${textareaSize.height}px` : undefined,
+                                    maxHeight: !isDesktopExpanded && textareaSize ? `${textareaSize.maxHeight}px` : undefined,
+                                    borderTopLeftRadius: chatInputRadius,
+                                    borderTopRightRadius: chatInputRadius,
+                                }}
+                                rows={1}
+                            />
+                        </div>
                     </div>
                     <div
                         className={cn(
